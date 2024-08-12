@@ -10,6 +10,7 @@ import shutil
 import time
 import warnings
 import PIL
+import math
 
 import torch
 import torch.nn as nn
@@ -24,7 +25,7 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
 
-from efficientnet_pytorch import EfficientNet
+from efficientnet_pytorch import EfficientNet, OBS_Sampler
 
 from varuna import Varuna
 
@@ -94,6 +95,18 @@ parser.add_argument("--profiling", action='store_true',
                         help="whether to run profiling for Varuna")
 parser.add_argument("--cpu", action="store_true", default=False,
                         help="run varuna on CPUs")
+
+# online batch selection arguments
+parser.add_argument("--OBS", action='store_true', default=False,
+                        help = "Enable online batch selection")
+parser.add_argument("--pp1", type=float,default=None,
+                        help = "number of microbatches for pipeline")
+parser.add_argument("--pp2", type=float,default=None,
+                        help = "number of microbatches for pipeline")
+parser.add_argument("--fac_begin", type=float,default=None,
+                        help = "number of microbatches for pipeline")
+parser.add_argument("--fac_end", type=float,default=None,
+                        help = "number of microbatches for pipeline")
 
 best_acc1 = 0
 
@@ -269,6 +282,8 @@ def main_worker(gpu, ngpus_per_node, args):
 
     if not args.varuna and args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
+    elif args.OBS and not args.distributed:
+        train_sampler = OBS_Sampler(model, nn.CrossEntropyLoss(redution = 'none'), train_dataset, train_dataset.data, train_dataset.target, args.batch_size, args.fac_begin, args.pp1, args.pp2, 0)
     else:
         train_sampler = None
 
@@ -295,6 +310,7 @@ def main_worker(gpu, ngpus_per_node, args):
     #         print(res, file=f)
     #     return
 
+    model.set_loss(nn.CrossEntropyLoss(reduction = 'none'))
     for epoch in range(args.start_epoch, args.epochs):
         if train_sampler is not None:
             train_sampler.set_epoch(epoch)
@@ -330,6 +346,11 @@ def train(train_loader, model, optimizer, epoch, args):
     progress = ProgressMeter(len(train_loader), batch_time, data_time, losses, top1,
                              top5, prefix="Epoch: [{}]".format(epoch))
 
+    if args.OBS:
+        mult_fac = math.exp(math.log(args.fac_end / args.fac_begin) / args.epochs)
+        fac = args.fac_begin * math.pow(mult_fac, epoch)
+        train_loader.sampler.fac = fac
+
     # switch to train mode
     model.train()
 
@@ -348,7 +369,9 @@ def train(train_loader, model, optimizer, epoch, args):
             batch = {"inputs": images.to(model.device), "target": target.to(model.device)}
             loss, overflow, grad_norm = model.step(batch)
         else:
-            loss = model(images, target=target)
+            Losses = model(images, target=target)
+            train_loader.batch_sampler.sampler.update(losses)
+            loss = Losses.mean()
         # loss = criterion(output, target)
 
         # measure accuracy and record loss
