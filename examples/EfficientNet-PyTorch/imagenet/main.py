@@ -287,7 +287,12 @@ def main_worker(gpu, ngpus_per_node, args):
     else:
         train_sampler = None
 
-    train_loader = torch.utils.data.DataLoader(
+    if args.OBS:
+        train_loader = torch.utils.data.DataLoader(
+        train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
+        num_workers=args.workers, pin_memory=True, batch_sampler=train_sampler)
+    else:
+        train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=True, sampler=train_sampler)
 
@@ -368,10 +373,12 @@ def train(train_loader, model, optimizer, epoch, args):
         if args.varuna:
             batch = {"inputs": images.to(model.device), "target": target.to(model.device)}
             loss, overflow, grad_norm = model.step(batch)
-        else:
+        elif args.OBS:
             Losses = model(images, target=target)
             train_loader.batch_sampler.sampler.update(losses)
             loss = Losses.mean()
+        else:
+            loss = model(images, target=target)
         # loss = criterion(output, target)
 
         # measure accuracy and record loss
