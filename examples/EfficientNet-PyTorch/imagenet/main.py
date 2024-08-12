@@ -288,6 +288,8 @@ def main_worker(gpu, ngpus_per_node, args):
         train_sampler = None
 
     if args.OBS:
+        model.set_loss(nn.CrossEntropyLoss(reduction = 'none'))
+
         train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=True, batch_sampler=train_sampler)
@@ -314,8 +316,6 @@ def main_worker(gpu, ngpus_per_node, args):
     #     with open('res.txt', 'w') as f:
     #         print(res, file=f)
     #     return
-
-    model.set_loss(nn.CrossEntropyLoss(reduction = 'none'))
     for epoch in range(args.start_epoch, args.epochs):
         if train_sampler is not None:
             train_sampler.set_epoch(epoch)
