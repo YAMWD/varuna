@@ -222,6 +222,9 @@ class EfficientNet(nn.Module):
         self.criterion = nn.CrossEntropyLoss()
         print(len(self._blocks),"blocks")
 
+    def set_loss(self, loss_fn):
+        self.criterion = loss_fn
+        
     def set_swish(self, memory_efficient=True):
         """Sets swish function as memory efficient (for training) or standard (for export).
 
