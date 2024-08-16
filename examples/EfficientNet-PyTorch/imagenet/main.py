@@ -283,13 +283,12 @@ def main_worker(gpu, ngpus_per_node, args):
     if not args.varuna and args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
     elif args.OBS and not args.distributed:
-        train_sampler = OBS_Sampler(model, nn.CrossEntropyLoss(redution = 'none'), train_dataset, train_dataset.data, train_dataset.target, args.batch_size, args.fac_begin, args.pp1, args.pp2, 0)
+        train_sampler = OBS_Sampler(model, nn.CrossEntropyLoss(reduction = 'none'), train_dataset, train_dataset.data, train_dataset.target, args.batch_size, args.fac_begin, args.pp1, args.pp2, 0)
     else:
         train_sampler = None
 
     if args.OBS:
         model.set_loss(nn.CrossEntropyLoss(reduction = 'none'))
-
         train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=True, batch_sampler=train_sampler)
