@@ -25,6 +25,7 @@ import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
+from torch.utils.tensorboard import SummaryWriter
 
 from efficientnet_pytorch import EfficientNet, OBS_Sampler
 
@@ -355,8 +356,9 @@ def train(train_loader, model, optimizer, epoch, args):
     if args.OBS:
         mult_fac = math.exp(math.log(args.fac_end / args.fac_begin) / args.epochs)
         fac = args.fac_begin * math.pow(mult_fac, epoch)
-        train_loader.sampler.fac = fac
-
+        train_loader.batch_sampler.sampler.fac = fac
+        train_loader.batch_sampler.sampler.init_prob()
+    
     # switch to train mode
     model.train()
 
@@ -376,7 +378,7 @@ def train(train_loader, model, optimizer, epoch, args):
             loss, overflow, grad_norm = model.step(batch)
         elif args.OBS:
             Losses = model(images, target=target)
-            train_loader.batch_sampler.sampler.update(losses)
+            train_loader.batch_sampler.sampler.update(Losses)
             loss = Losses.mean()
         else:
             loss = model(images, target=target)
@@ -402,11 +404,6 @@ def train(train_loader, model, optimizer, epoch, args):
         if i % args.print_freq == 0:
             progress.print(i)
 
-        count -= 1
-        if count == 0:
-            break
-
-
 def validate(val_loader, model, args):
     batch_time = AverageMeter('Time', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
@@ -431,7 +428,9 @@ def validate(val_loader, model, args):
                 loss = model.evaluate(batch)
             else:
                 loss = model(images, target=target)
-
+                if args.OBS:
+                    loss = loss.mean()
+  
             # record loss
             losses.update(loss if args.varuna else loss.item(), images.size(0))
 
