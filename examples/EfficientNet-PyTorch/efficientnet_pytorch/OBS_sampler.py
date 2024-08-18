@@ -13,10 +13,13 @@ lastii = 0
 
 class OBS_Sampler(Sampler):
 
-    def __init__(self, model, losses_fn, data_source, train_data, train_target, batch_size, fac, pp1, pp2, epoch, drop_last = True):
-        self.sampler = RandomSampler(model, losses_fn, data_source, train_data, train_target, batch_size, fac, pp1, pp2, epoch)
+    def __init__(self, model, losses_fn, data_source, train_data, train_target, batch_size, fac, pp1, pp2, epoch, device = 'cpu', drop_last = True):
+        self.sampler = RandomSampler(model, losses_fn, data_source, train_data, train_target, batch_size, fac, pp1, pp2, epoch, device)
         self.batch_size = batch_size
         self.drop_last = drop_last
+
+    def set_epoch(self, epoch):
+        self.sampler.epoch = epoch
 
     def __iter__(self):
         batch = []
@@ -36,16 +39,15 @@ class RandomSampler(Sampler):
         data_source (Dataset): dataset to sample from
     """
 
-    def __init__(self, model, losses_fn, data_source, train_data, train_target, batch_size, fac, pp1, pp2, epoch):
+    def __init__(self, model, losses_fn, data_source, train_data, train_target, batch_size, fac, pp1, pp2, epoch, device = 'cpu'):
         self.model = model
         self.losses_fn = losses_fn
         self.data_source = data_source
         self.batch_size = batch_size
         self.data = train_data
-        self.data = torch.unsqueeze(self.data, 1)
-        # self.data = self.data.type(torch.cuda.FloatTensor)
-        self.target = train_target
-
+        self.target = train_target        
+        self.device = device
+	
         self.sorting_evaluations_period = 100   # increase it if sorting is too expensive
         self.sorting_evaluations_ago = 2 * self.sorting_evaluations_period
 
@@ -86,6 +88,8 @@ class RandomSampler(Sampler):
         for i in range(0, self.ntraining):
             if (i == 0):    self.sumprob[i] = self.prob[i]
             else:           self.sumprob[i] = self.sumprob[i-1] + self.prob[i]
+
+        self.stop = 0 # reset stop flag for batch iteration
 
     def get_scores(self):
         output, feat = self.model.forward(self.data)
@@ -133,9 +137,11 @@ class RandomSampler(Sampler):
                         inputs = self.data[idxs] / 256. #manual norm for input images
                     targets = self.target[idxs]
                     
+                    inputs = inputs.to(self.device)
+                    targets = targets.to(self.device)
+            
                     self.model.eval()
-                    output = self.model(inputs)
-                    losses = self.losses_fn(output, targets)
+                    losses = self.model(inputs, targets)
                     i = 0
                     for idx in indexes:
                         self.bfs[idx][0] = losses[i]

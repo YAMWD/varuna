@@ -110,8 +110,10 @@ parser.add_argument("--fac_begin", type=float,default=None,
 parser.add_argument("--fac_end", type=float,default=None,
                         help = "number of microbatches for pipeline")
 
-best_acc1 = 0
+# tensorboard arguments
+parser.add_argument("--log_dir", type = str, default = None, help = "path to tensorboard log")
 
+best_acc1 = 0
 
 def main():
     args = parser.parse_args()
@@ -151,7 +153,8 @@ def main():
 def main_worker(gpu, ngpus_per_node, args):
     global best_acc1
     args.gpu = gpu
-
+    writer = SummaryWriter(log_dir = args.log_dir)
+    
     if args.gpu is not None:
         print("Use GPU: {} for training".format(args.gpu))
 
@@ -287,7 +290,8 @@ def main_worker(gpu, ngpus_per_node, args):
     if not args.varuna and args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
     elif args.OBS and not args.distributed:
-        train_sampler = OBS_Sampler(model, nn.CrossEntropyLoss(reduction = 'none'), train_dataset, torch.tensor(train_dataset_data), torch.tensor(train_dataset.targets), args.batch_size, args.fac_begin, args.pp1, args.pp2, 0)
+        device = 'cuda:{}'.format(args.gpu) # if cuda out of mem
+        train_sampler = OBS_Sampler(model, nn.CrossEntropyLoss(reduction = 'none'), train_dataset, torch.tensor(train_dataset_data), torch.tensor(train_dataset.targets), args.batch_size, args.fac_begin, args.pp1, args.pp2, 0, device = device)
     else:
         train_sampler = None
 
@@ -324,7 +328,8 @@ def main_worker(gpu, ngpus_per_node, args):
         adjust_learning_rate(optimizer, epoch, args)
 
         # train for one epoch
-        train(train_loader, model, optimizer, epoch, args)
+        train(train_loader, model, optimizer, epoch, args, writer)
+        writer.flush()
 
         # evaluate on validation set
         acc1 = validate(val_loader, model, args)
@@ -344,7 +349,7 @@ def main_worker(gpu, ngpus_per_node, args):
             }, epoch+1, is_best, args.varuna)
 
 
-def train(train_loader, model, optimizer, epoch, args):
+def train(train_loader, model, optimizer, epoch, args, writer):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
@@ -403,6 +408,8 @@ def train(train_loader, model, optimizer, epoch, args):
 
         if i % args.print_freq == 0:
             progress.print(i)
+
+        writer.add_scalar("Loss/train", losses.avg, epoch)
 
 def validate(val_loader, model, args):
     batch_time = AverageMeter('Time', ':6.3f')
