@@ -6,6 +6,7 @@ import random
 from bisect import bisect_right
 from torch.utils.data.sampler import Sampler
 import copy
+from torchvision import transforms
 
 # global counters
 curii = 0
@@ -90,6 +91,8 @@ class RandomSampler(Sampler):
             else:           self.sumprob[i] = self.sumprob[i-1] + self.prob[i]
 
         self.stop = 0 # reset stop flag for batch iteration
+        self.iter = 0
+        self.indexes = []
 
     def get_scores(self):
         output, feat = self.model.forward(self.data)
@@ -113,7 +116,7 @@ class RandomSampler(Sampler):
                 lastii = curii
                 stopp = 0
                 iii = 0
-                bs_here = 500
+                bs_here = 16
                 maxpt = int(self.ntraining * self.pp2)
                 while (stopp == 0):
                     indexes = []
@@ -133,15 +136,14 @@ class RandomSampler(Sampler):
                         idxs.append(int(self.bfs[idx][1]))
 
                     inputs = self.data[idxs] 
-                    if torch.any(inputs > 1):
-                        inputs = self.data[idxs] / 256. #manual norm for input images
                     targets = self.target[idxs]
                     
                     inputs = inputs.to(self.device)
                     targets = targets.to(self.device)
             
                     self.model.eval()
-                    losses = self.model(inputs, targets)
+                    with torch.no_grad():
+                        losses = self.model(inputs, targets)
                     i = 0
                     for idx in indexes:
                         self.bfs[idx][0] = losses[i]
@@ -156,7 +158,7 @@ class RandomSampler(Sampler):
                 if (self.sorting_evaluations_ago >= self.sorting_evaluations_period):
                     self.bfs = self.bfs[self.bfs[:,0].argsort()[::-1]]
                     self.sorting_evaluations_ago = 0
-
+            
             stop1 = 0
             while (stop1 == 0):
                 index = self.iter
@@ -169,6 +171,7 @@ class RandomSampler(Sampler):
                     stop1 = 1
 
             self.sorting_evaluations_ago = self.sorting_evaluations_ago + self.batch_size
+            
             if (self.iter == len(self.data_source)):
                 # traversed the whole training dataset, proceed to the next epoch
                 self.stop = 1

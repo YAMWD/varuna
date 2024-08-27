@@ -245,7 +245,7 @@ def main_worker(gpu, ngpus_per_node, args):
         ]))
     
     train_dataset_data = np.array([sample for sample, _ in train_dataset])
-    
+
     if args.varuna:
         def get_batch_fn(size, device=None):
             loader_ = torch.utils.data.DataLoader(train_dataset, batch_size=size)
@@ -290,7 +290,7 @@ def main_worker(gpu, ngpus_per_node, args):
     if not args.varuna and args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
     elif args.OBS and not args.distributed:
-        device = 'cuda:{}'.format(args.gpu) # if cuda out of mem
+        device = 'cuda:{}'.format(args.gpu) if args.gpu is not None else 'cpu' # if cuda out of mem
         train_sampler = OBS_Sampler(model, nn.CrossEntropyLoss(reduction = 'none'), train_dataset, torch.tensor(train_dataset_data), torch.tensor(train_dataset.targets), args.batch_size, args.fac_begin, args.pp1, args.pp2, 0, device = device)
     else:
         train_sampler = None
