@@ -8,10 +8,6 @@ from torch.utils.data.sampler import Sampler
 import copy
 from torchvision import transforms
 
-# global counters
-curii = 0
-lastii = 0
-
 class OBS_Sampler(Sampler):
 
     def __init__(self, model, losses_fn, data_source, train_data, train_target, batch_size, fac, pp1, pp2, epoch, device = 'cpu', drop_last = True):
@@ -56,6 +52,8 @@ class RandomSampler(Sampler):
         self.pp1 = pp1
         self.pp2 = pp2
 
+        self.curii = 0
+        self.lastii = 0
         self.ntraining = len(train_data)
 
         self.bfs = np.ndarray((self.ntraining, 2))
@@ -101,19 +99,17 @@ class RandomSampler(Sampler):
         return loss
 
     def update(self, losses):
-        global curii
-        global lastii
         i = 0
         indice = self.indexes
         for idx in indice:
             self.bfs[idx][0] = losses[i] # update loss for corresponding datapoint, rely on the computed index, so index cannot be wrapped into a sampler that is invisible to the training loop
             i = i + 1
 
-        curii = curii + len(indice)
+        self.curii = self.curii + len(indice)
 
         if (self.pp1 > 0):
-            if (curii - lastii > self.ntraining / self.pp1):
-                lastii = curii
+            if (self.curii - self.lastii > self.ntraining / self.pp1):
+                self.lastii = self.curii
                 stopp = 0
                 iii = 0
                 bs_here = 16

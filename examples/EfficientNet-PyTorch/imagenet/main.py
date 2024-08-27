@@ -115,6 +115,13 @@ parser.add_argument("--log_dir", type = str, default = None, help = "path to ten
 
 best_acc1 = 0
 
+# set seed for reproducibility
+seed = 1721603134
+torch.manual_seed(seed)
+np.random.seed(seed)
+random.seed(seed)
+rng = torch.Generator().manual_seed(seed)
+
 def main():
     args = parser.parse_args()
 
