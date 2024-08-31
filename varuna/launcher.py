@@ -173,7 +173,7 @@ if __name__ == "__main__":
     args = parse_args()
     manager_ip = os.environ[HEARTBEAT_IP_ENV_VAR]
     manager_port = int(os.environ[MORPH_PORT_ENV_VAR])
-
+    
     def handler(signum,_):
         global loop_pending
         print('Signal handler called with signal', signum, flush=True)

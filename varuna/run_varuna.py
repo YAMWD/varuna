@@ -7,7 +7,7 @@ import sys
 from .utils import HEARTBEAT_IP_ENV_VAR, HEARTBEAT_PORT_ENV_VAR, VARUNA_TEMP_FOLDER, MORPH_PORT_ENV_VAR
 
 HEARTBEAT_PORT = 5000 
-MORPH_PORT = 4200
+MORPH_PORT = 4000
 
 # TODO: readme/docs for launch process
 
@@ -161,7 +161,7 @@ if __name__ == "__main__":
     current_env[HEARTBEAT_PORT_ENV_VAR] = str(HEARTBEAT_PORT)
     current_env[MORPH_PORT_ENV_VAR] = str(MORPH_PORT)
    # current_env["PATH"] = "PATH=\"/home/varuna/anaconda3/bin:$PATH\""
-    
+
     for i,machine in enumerate(reachable_machines):
         launch_cmd = launch_cmd_format.format(i, reachable_count, master_addr)
         out_file = open(f"ssh_logs/ssh_out_{i}", "w")
@@ -180,7 +180,7 @@ if __name__ == "__main__":
             cmd.append(get_env_vars(args.env_file))
             cmd.append("bash launch_varuna.sh")
             print(" ".join(cmd ))
-       
+
         process = subprocess.Popen(cmd, env=current_env, 
                                     stdout=out_file,
                                     stderr=err_file)
