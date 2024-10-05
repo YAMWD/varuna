@@ -104,15 +104,17 @@ class RandomSampler(Sampler):
         for idx in indice:
             self.bfs[idx][0] = losses[i] # update loss for corresponding datapoint, rely on the computed index, so index cannot be wrapped into a sampler that is invisible to the training loop
             i = i + 1
-
+        
         self.curii = self.curii + len(indice)
 
         if (self.pp1 > 0):
+            training_flag = self.model.training
+            self.model.eval()
             if (self.curii - self.lastii > self.ntraining / self.pp1):
                 self.lastii = self.curii
                 stopp = 0
                 iii = 0
-                bs_here = 16
+                bs_here = 32
                 maxpt = int(self.ntraining * self.pp2)
                 while (stopp == 0):
                     indexes = []
@@ -131,19 +133,21 @@ class RandomSampler(Sampler):
                     for idx in indexes:
                         idxs.append(int(self.bfs[idx][1]))
 
+                    # import pdb; pdb.set_trace()
                     inputs = self.data[idxs] 
                     targets = self.target[idxs]
                     
                     inputs = inputs.to(self.device)
                     targets = targets.to(self.device)
             
-                    self.model.eval()
                     with torch.no_grad():
                         losses = self.model(inputs, targets)
                     i = 0
                     for idx in indexes:
                         self.bfs[idx][0] = losses[i]
                         i = i + 1
+            if training_flag:
+                self.model.train() # switch back to train
 
     def __iter__(self):
         while (self.stop == 0):
