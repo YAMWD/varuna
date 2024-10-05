@@ -428,3 +428,60 @@ class EfficientNet(nn.Module):
             Conv2d = get_same_padding_conv2d(image_size=self._global_params.image_size)
             out_channels = round_filters(32, self._global_params)
             self._conv_stem = Conv2d(in_channels, out_channels, kernel_size=3, stride=2, bias=False)
+
+class Net(nn.Module):
+    def __init__(self):
+        super(Net, self).__init__()
+
+        alpha = .15
+        epsilon = 1e-4
+        nfilters = 32
+        fullnetsize = 256
+
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(1, nfilters, 5),
+            nn.BatchNorm2d(nfilters, eps = epsilon, momentum = alpha),
+            nn.ReLU(),
+            nn.MaxPool2d(2)
+        )
+
+        self.conv2 = nn.Sequential(
+            nn.Conv2d(nfilters, nfilters, 5),
+            nn.BatchNorm2d(nfilters, eps = epsilon, momentum = alpha),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            # nn.Dropout2d(p = .5)
+        )
+
+        self.fc1 = nn.Sequential(
+            nn.Linear(512, fullnetsize),
+            nn.ReLU(),
+            nn.Dropout(p = .0),
+        )
+
+        self.fc2 = nn.Sequential(
+            nn.Linear(fullnetsize, 10),
+            nn.Softmax(),
+        )
+
+        self.criterion = nn.CrossEntropyLoss()
+
+    def set_loss(self, loss_fn):
+        self.criterion = loss_fn
+
+    def forward(self, x, target):
+        if not torch.is_tensor(x):
+            x = torch.from_numpy(x)
+        x = self.conv1(x)
+        x = self.conv2(x)
+        # import pdb; pdb.set_trace()
+        x = x.view(-1, 512)
+        x = self.fc1(x)
+        x = self.fc2(x)
+
+        # import pdb; pdb.set_trace()
+        loss = self.criterion(x, target)
+        
+        return loss
+
+
