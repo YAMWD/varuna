@@ -25,9 +25,10 @@ import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
+import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 
-from efficientnet_pytorch import EfficientNet, OBS_Sampler
+from efficientnet_pytorch import EfficientNet, OBS_Sampler, Net
 
 from varuna import Varuna
 
@@ -122,6 +123,14 @@ np.random.seed(seed)
 random.seed(seed)
 rng = torch.Generator().manual_seed(seed)
 
+if torch.cuda.is_available():
+    torch.cuda.manual_seed(seed)	
+    torch.cuda.manual_seed_all(seed)	
+    torch.backends.cudnn.benckmark = False
+    torch.backends.cudnn.deterministic = True
+
+torch.set_printoptions(precision=20)
+
 def main():
     args = parser.parse_args()
 
@@ -156,6 +165,25 @@ def main():
         # Simply call main_worker function
         main_worker(args.gpu, ngpus_per_node, args)
 
+class CCE_losses_fn(nn.Module):
+    def __init__(self):
+        super(CCE_losses_fn, self).__init__()
+
+    def forward(self, output, targets):
+        if not torch.is_tensor(targets):
+            targets = torch.from_numpy(targets)
+
+        return (-(output + 1e-5).log() * F.one_hot(targets, num_classes = 10)).sum(dim=1)
+
+class CCE_loss_fn(nn.Module):
+    def __init__(self):
+        super(CCE_loss_fn, self).__init__()
+
+    def forward(self, output, targets):
+        if not torch.is_tensor(targets):
+            targets = torch.from_numpy(targets)
+
+        return (-(output + 1e-5).log() * F.one_hot(targets, num_classes = 10)).sum(dim=1).mean()
 
 def main_worker(gpu, ngpus_per_node, args):
     global best_acc1
@@ -188,7 +216,10 @@ def main_worker(gpu, ngpus_per_node, args):
             model = EfficientNet.from_name(args.arch)
 
     else:
-        if args.pretrained:
+        if 'Net' in args.arch:
+            model = Net()
+            print("=> using customized model")
+        elif args.pretrained:
             print("=> using pre-trained model '{}'".format(args.arch))
             model = models.__dict__[args.arch](pretrained=True)
         else:
@@ -250,9 +281,49 @@ def main_worker(gpu, ngpus_per_node, args):
             transforms.ToTensor(),
             normalize,
         ]))
+
+    # Generate shuffled indices
+    shuffled_indices = torch.randperm(len(train_dataset))
+
+    # Create a new dataset class that uses shuffled indices
+    class ShuffledDataset(datasets.ImageFolder):
+        def __init__(self, dataset, shuffled_indices):
+            self.dataset = dataset
+            self.shuffled_indices = shuffled_indices
+
+        def __len__(self):
+            return len(self.dataset)
+
+        def __getitem__(self, index):
+            shuffled_index = self.shuffled_indices[index]
+            return self.dataset[shuffled_index]
+
+    # Instantiate the shuffled dataset
+    train_dataset = ShuffledDataset(train_dataset, shuffled_indices)
+
+    transform = transforms.Compose([
+        transforms.ToTensor(),
+        lambda x: x * 255. / 256.,
+    ])
+
+    if 'Net' in args.arch: 
+        # Load the full training set
+        full_train_dataset = datasets.MNIST(root='./data', train=True, download=True, transform=transform)
+
+        # Define the size of the validation set
+        validation_size = 10000
+        train_size = len(full_train_dataset) - validation_size
+
+        # deterministic split
+        train_dataset, validation_dataset = torch.utils.data.Subset(full_train_dataset, range(train_size)), torch.utils.data.Subset(full_train_dataset, range(train_size, train_size + validation_size))
+
+        indices = train_dataset.indices
+        train_data = train_dataset.dataset.data[indices]
+        train_target = train_dataset.dataset.train_labels[indices]
     
     train_dataset_data = np.array([sample for sample, _ in train_dataset])
-
+    train_target = np.array([label for _, label in train_dataset])
+ 
     if args.varuna:
         def get_batch_fn(size, device=None):
             loader_ = torch.utils.data.DataLoader(train_dataset, batch_size=size)
@@ -267,9 +338,15 @@ def main_worker(gpu, ngpus_per_node, args):
                     args.batch_size, args.chunk_size, fp16=False, 
                     local_rank=-1, device="cpu" if args.cpu else -1)
 
+    ''' 
     optimizer = torch.optim.SGD(model.parameters(), args.lr,
                                 momentum=args.momentum,
                                 weight_decay=args.weight_decay)
+    '''
+    # optimizer = torch.optim.Adadelta(model.parameters(), lr = 1.0, rho = 0.95, eps = 1e-6)
+    
+    optimizer = torch.optim.Adam(model.parameters(), lr = args.lr)
+
     if args.varuna:
         model.set_optimizer(optimizer)
 
@@ -298,7 +375,7 @@ def main_worker(gpu, ngpus_per_node, args):
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
     elif args.OBS and not args.distributed:
         device = 'cuda:{}'.format(args.gpu) if args.gpu is not None else 'cpu' # if cuda out of mem
-        train_sampler = OBS_Sampler(model, nn.CrossEntropyLoss(reduction = 'none'), train_dataset, torch.tensor(train_dataset_data), torch.tensor(train_dataset.targets), args.batch_size, args.fac_begin, args.pp1, args.pp2, 0, device = device)
+        train_sampler = OBS_Sampler(model, nn.CrossEntropyLoss(reduction = 'none'), train_dataset, torch.tensor(train_dataset_data), torch.tensor(train_target), args.batch_size, args.fac_begin, args.pp1, args.pp2, 0, device = device)
     else:
         train_sampler = None
 
@@ -306,23 +383,38 @@ def main_worker(gpu, ngpus_per_node, args):
         model.set_loss(nn.CrossEntropyLoss(reduction = 'none'))
         train_loader = torch.utils.data.DataLoader(
         train_dataset, num_workers=args.workers, pin_memory=True, batch_sampler=train_sampler)
+	# num_workers need to match number of machines, otherwise index computation would be wrong in OBS update
     else:
         train_loader = torch.utils.data.DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=(train_sampler is None),
         num_workers=args.workers, pin_memory=True, sampler=train_sampler)
 
-    val_transforms = transforms.Compose([
-        transforms.Resize(image_size, interpolation=PIL.Image.BICUBIC),
-        transforms.CenterCrop(image_size),
-        transforms.ToTensor(),
-        normalize,
-    ])
-    print('Using image size', image_size)
+    if 'Net' in args.arch:
+        if args.OBS:
+            model.set_loss(CCE_losses_fn())
+        else:
+            model.set_loss(CCE_loss_fn())
+        test_dataset = datasets.MNIST(root='./data', train=False, download=True, transform=transform)
+        val_loader = torch.utils.data.DataLoader(
+            # dataset=test_dataset, 
+            dataset = train_dataset, 
+            batch_size = args.batch_size, 
+            shuffle = False,
+            num_workers = args.workers, pin_memory = True)
+    else:
+        val_transforms = transforms.Compose([
+            transforms.Resize(image_size, interpolation=PIL.Image.BICUBIC),
+            transforms.CenterCrop(image_size),
+            transforms.ToTensor(),
+            normalize,
+        ])
+        print('Using image size', image_size)
 
-    val_loader = torch.utils.data.DataLoader(
-        datasets.ImageFolder(valdir, val_transforms),
-        batch_size=args.batch_size, shuffle=False,
-        num_workers=args.workers, pin_memory=True)
+        val_loader = torch.utils.data.DataLoader(
+            # datasets.ImageFolder(valdir, val_transforms),
+            datasets.ImageFolder(traindir, val_transforms),
+            batch_size=args.batch_size, shuffle=False,
+            num_workers=args.workers, pin_memory=True)
 
     # if args.evaluate:
     #     res = validate(val_loader, model, criterion, args)
@@ -332,14 +424,15 @@ def main_worker(gpu, ngpus_per_node, args):
     for epoch in range(args.start_epoch, args.epochs):
         if train_sampler is not None:
             train_sampler.set_epoch(epoch)
-        adjust_learning_rate(optimizer, epoch, args)
+        # adjust_learning_rate(optimizer, epoch, args)
 
         # train for one epoch
         train(train_loader, model, optimizer, epoch, args, writer)
         writer.flush()
 
         # evaluate on validation set
-        acc1 = validate(val_loader, model, args)
+        acc1 = validate(val_loader, model, epoch, args, writer)
+        writer.flush()
 
         # remember best acc@1 and save checkpoint
         is_best = acc1 > best_acc1
@@ -364,7 +457,7 @@ def train(train_loader, model, optimizer, epoch, args, writer):
     top5 = AverageMeter('Acc@5', ':6.2f')
     progress = ProgressMeter(len(train_loader), batch_time, data_time, losses, top1,
                              top5, prefix="Epoch: [{}]".format(epoch))
-
+    
     if args.OBS:
         mult_fac = math.exp(math.log(args.fac_end / args.fac_begin) / args.epochs)
         fac = args.fac_begin * math.pow(mult_fac, epoch)
@@ -379,7 +472,6 @@ def train(train_loader, model, optimizer, epoch, args, writer):
     for i, (images, target) in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
-
         if args.gpu is not None:
             images = images.cuda(args.gpu, non_blocking=True)
             target = target.cuda(args.gpu, non_blocking=True)
@@ -390,7 +482,6 @@ def train(train_loader, model, optimizer, epoch, args, writer):
             loss, overflow, grad_norm = model.step(batch)
         elif args.OBS:
             Losses = model(images, target=target)
-            train_loader.batch_sampler.sampler.update(Losses)
             loss = Losses.mean()
         else:
             loss = model(images, target=target)
@@ -402,13 +493,20 @@ def train(train_loader, model, optimizer, epoch, args, writer):
         # top1.update(acc1[0], images.size(0))
         # top5.update(acc5[0], images.size(0))
 
+        # import pdb; pdb.set_trace()
         # compute gradient and do SGD step
         if not args.varuna:
             loss.backward()
-        
+        '''
+        print(loss)
+        if epoch == 38:
+            import pdb; pdb.set_trace()
+        '''
         optimizer.step()
         optimizer.zero_grad()
 
+        if args.OBS:
+            train_loader.batch_sampler.sampler.update(Losses)
         # measure elapsed time
         batch_time.update(time.time() - end)
         end = time.time()
@@ -416,9 +514,10 @@ def train(train_loader, model, optimizer, epoch, args, writer):
         if i % args.print_freq == 0:
             progress.print(i)
 
-        writer.add_scalar("Loss/train", losses.avg, epoch)
+    writer.add_scalar("Loss/train", losses.avg, epoch)
+    # import pdb; pdb.set_trace()
 
-def validate(val_loader, model, args):
+def validate(val_loader, model, epoch, args, writer):
     batch_time = AverageMeter('Time', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
     top1 = AverageMeter('Acc@1', ':6.2f')
@@ -455,6 +554,8 @@ def validate(val_loader, model, args):
             if i % args.print_freq == 0:
                 progress.print(i)
 
+    writer.add_scalar("Val_Loss/train", losses.avg, epoch)
+    
     return losses.avg
 
 
